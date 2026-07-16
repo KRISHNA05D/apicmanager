@@ -1,4 +1,9 @@
 # Compiled binaries
 src/hello
+src/scanner_test
 build/
 *.o
+
+# Test data
+test_photos/
+
