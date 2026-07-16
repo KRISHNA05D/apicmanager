@@ -1,0 +1,4 @@
+# Compiled binaries
+src/hello
+build/
+*.o
