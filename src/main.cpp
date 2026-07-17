@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <ctime>
+#include <vector>
 #include <exiv2/exiv2.hpp>
 
 namespace fs = std::filesystem;
@@ -11,6 +12,11 @@ std::string toLowerCase(std::string text) {
     std::transform(text.begin(), text.end(), text.begin(),
                    [](unsigned char c) { return std::tolower(c); });
     return text;
+}
+
+bool isImageFile(const fs::path& path) {
+    std::string ext = toLowerCase(path.extension().string());
+    return ext == ".jpg" || ext == ".jpeg" || ext == ".png";
 }
 
 std::string getPhotoDate(const std::string& imagePath) {
@@ -49,6 +55,21 @@ std::string getFallbackDate(const fs::path& filePath) {
     return std::string(buffer);
 }
 
+void printProgress(int current, int total) {
+    int barWidth = 40;
+    float progress = (total == 0) ? 0 : (float)current / total;
+    int pos = barWidth * progress;
+
+    std::cout << "\r[";
+    for (int i = 0; i < barWidth; i++) {
+        if (i < pos) std::cout << "=";
+        else if (i == pos) std::cout << ">";
+        else std::cout << " ";
+    }
+    std::cout << "] " << current << "/" << total << " files   ";
+    std::cout.flush();
+}
+
 int main(int argc, char* argv[]) {
 
     if (argc < 3) {
@@ -61,7 +82,6 @@ int main(int argc, char* argv[]) {
 
     if (command != "organize") {
         std::cout << "Unknown command: " << command << std::endl;
-        std::cout << "Usage: " << argv[0] << " organize <source_folder>" << std::endl;
         return 1;
     }
 
@@ -72,42 +92,46 @@ int main(int argc, char* argv[]) {
 
     std::string destFolder = sourceFolder + "_organized";
 
-    int copiedCount = 0;
-    int fallbackCount = 0;
-
+    // Pass 1: collect all image files first
+    std::vector<fs::path> imageFiles;
     for (const auto& entry : fs::recursive_directory_iterator(sourceFolder)) {
-        if (fs::is_regular_file(entry)) {
-            std::string ext = toLowerCase(entry.path().extension().string());
-            if (ext == ".jpg" || ext == ".jpeg" || ext == ".png") {
-
-                std::string date = getPhotoDate(entry.path().string());
-                std::string year, month;
-
-                if (!date.empty()) {
-                    year = date.substr(0, 4);
-                    month = date.substr(5, 2);
-                } else {
-                    std::string fallback = getFallbackDate(entry.path());
-                    year = fallback.substr(0, 4);
-                    month = fallback.substr(5, 2);
-                    fallbackCount++;
-                    std::cout << "FALLBACK (using modified date): " << entry.path().filename().string() << std::endl;
-                }
-
-                std::string targetDir = destFolder + "/" + year + "/" + month;
-                fs::create_directories(targetDir);
-
-                std::string targetPath = targetDir + "/" + entry.path().filename().string();
-
-                fs::copy_file(entry.path(), targetPath, fs::copy_options::overwrite_existing);
-
-                std::cout << "COPIED: " << entry.path().filename().string() << " -> " << year << "/" << month << std::endl;
-                copiedCount++;
-            }
+        if (fs::is_regular_file(entry) && isImageFile(entry.path())) {
+            imageFiles.push_back(entry.path());
         }
     }
 
-    std::cout << "\n--- Summary ---" << std::endl;
+    int total = imageFiles.size();
+    std::cout << "Found " << total << " image files to organize.\n" << std::endl;
+
+    // Pass 2: process each file with progress bar
+    int copiedCount = 0;
+    int fallbackCount = 0;
+
+    for (const auto& filePath : imageFiles) {
+        std::string date = getPhotoDate(filePath.string());
+        std::string year, month;
+
+        if (!date.empty()) {
+            year = date.substr(0, 4);
+            month = date.substr(5, 2);
+        } else {
+            std::string fallback = getFallbackDate(filePath);
+            year = fallback.substr(0, 4);
+            month = fallback.substr(5, 2);
+            fallbackCount++;
+        }
+
+        std::string targetDir = destFolder + "/" + year + "/" + month;
+        fs::create_directories(targetDir);
+
+        std::string targetPath = targetDir + "/" + filePath.filename().string();
+        fs::copy_file(filePath, targetPath, fs::copy_options::overwrite_existing);
+
+        copiedCount++;
+        printProgress(copiedCount, total);
+    }
+
+    std::cout << "\n\n--- Summary ---" << std::endl;
     std::cout << "Copied: " << copiedCount << std::endl;
     std::cout << "Used fallback date: " << fallbackCount << std::endl;
 
