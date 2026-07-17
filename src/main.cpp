@@ -4,6 +4,7 @@
 #include <cctype>
 #include <ctime>
 #include <vector>
+#include <fstream>
 #include <exiv2/exiv2.hpp>
 
 namespace fs = std::filesystem;
@@ -55,6 +56,14 @@ std::string getFallbackDate(const fs::path& filePath) {
     return std::string(buffer);
 }
 
+std::string getCurrentTimestamp() {
+    auto now = std::time(nullptr);
+    std::tm* timeInfo = std::localtime(&now);
+    char buffer[32];
+    std::strftime(buffer, sizeof(buffer), "%Y-%m-%d_%H-%M-%S", timeInfo);
+    return std::string(buffer);
+}
+
 void printProgress(int current, int total) {
     int barWidth = 40;
     float progress = (total == 0) ? 0 : (float)current / total;
@@ -92,6 +101,14 @@ int main(int argc, char* argv[]) {
 
     std::string destFolder = sourceFolder + "_organized";
 
+    // Set up log file
+    std::string logFileName = "apicmanager_log_" + getCurrentTimestamp() + ".txt";
+    std::ofstream logFile(logFileName);
+    logFile << "ApicManager Log - " << getCurrentTimestamp() << std::endl;
+    logFile << "Source folder: " << sourceFolder << std::endl;
+    logFile << "Destination folder: " << destFolder << std::endl;
+    logFile << "------------------------------------" << std::endl;
+
     // Pass 1: collect all image files first
     std::vector<fs::path> imageFiles;
     for (const auto& entry : fs::recursive_directory_iterator(sourceFolder)) {
@@ -102,6 +119,7 @@ int main(int argc, char* argv[]) {
 
     int total = imageFiles.size();
     std::cout << "Found " << total << " image files to organize.\n" << std::endl;
+    logFile << "Found " << total << " image files to organize." << std::endl;
 
     // Pass 2: process each file with progress bar
     int copiedCount = 0;
@@ -110,6 +128,7 @@ int main(int argc, char* argv[]) {
     for (const auto& filePath : imageFiles) {
         std::string date = getPhotoDate(filePath.string());
         std::string year, month;
+        bool usedFallback = false;
 
         if (!date.empty()) {
             year = date.substr(0, 4);
@@ -119,6 +138,7 @@ int main(int argc, char* argv[]) {
             year = fallback.substr(0, 4);
             month = fallback.substr(5, 2);
             fallbackCount++;
+            usedFallback = true;
         }
 
         std::string targetDir = destFolder + "/" + year + "/" + month;
@@ -127,13 +147,23 @@ int main(int argc, char* argv[]) {
         std::string targetPath = targetDir + "/" + filePath.filename().string();
         fs::copy_file(filePath, targetPath, fs::copy_options::overwrite_existing);
 
+        logFile << "COPIED: " << filePath.filename().string()
+                << " -> " << year << "/" << month
+                << (usedFallback ? " [fallback date used]" : " [EXIF date used]")
+                << std::endl;
+
         copiedCount++;
         printProgress(copiedCount, total);
     }
 
+    logFile << "------------------------------------" << std::endl;
+    logFile << "Summary: Copied " << copiedCount << ", Fallback used " << fallbackCount << std::endl;
+    logFile.close();
+
     std::cout << "\n\n--- Summary ---" << std::endl;
     std::cout << "Copied: " << copiedCount << std::endl;
     std::cout << "Used fallback date: " << fallbackCount << std::endl;
+    std::cout << "Log saved to: " << logFileName << std::endl;
 
     return 0;
 }
