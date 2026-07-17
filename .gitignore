@@ -1,9 +1,10 @@
 # Compiled binaries
 src/hello
 src/scanner_test
+src/exif_test
+src/apicmanager
 build/
 *.o
 
 # Test data
 test_photos/
-
