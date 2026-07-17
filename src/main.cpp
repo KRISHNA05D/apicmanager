@@ -49,9 +49,28 @@ std::string getFallbackDate(const fs::path& filePath) {
     return std::string(buffer);
 }
 
-int main() {
-    std::string sourceFolder = "/home/tomcat/projects/apicmanager/test_photos";
-    std::string destFolder = "/home/tomcat/projects/apicmanager/organized";
+int main(int argc, char* argv[]) {
+
+    if (argc < 3) {
+        std::cout << "Usage: " << argv[0] << " organize <source_folder>" << std::endl;
+        return 1;
+    }
+
+    std::string command = argv[1];
+    std::string sourceFolder = argv[2];
+
+    if (command != "organize") {
+        std::cout << "Unknown command: " << command << std::endl;
+        std::cout << "Usage: " << argv[0] << " organize <source_folder>" << std::endl;
+        return 1;
+    }
+
+    if (!fs::exists(sourceFolder)) {
+        std::cout << "Error: Folder does not exist: " << sourceFolder << std::endl;
+        return 1;
+    }
+
+    std::string destFolder = sourceFolder + "_organized";
 
     int copiedCount = 0;
     int fallbackCount = 0;
