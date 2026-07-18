@@ -5,7 +5,9 @@
 #include <ctime>
 #include <vector>
 #include <fstream>
+#include <sstream>
 #include <exiv2/exiv2.hpp>
+#include <sqlite3.h>
 
 namespace fs = std::filesystem;
 
@@ -25,15 +27,9 @@ std::string getPhotoDate(const std::string& imagePath) {
         auto image = Exiv2::ImageFactory::open(imagePath);
         image->readMetadata();
         Exiv2::ExifData &exifData = image->exifData();
-
-        if (exifData.empty()) {
-            return "";
-        }
-
+        if (exifData.empty()) return "";
         auto it = exifData.findKey(Exiv2::ExifKey("Exif.Photo.DateTimeOriginal"));
-        if (it != exifData.end()) {
-            return it->value().toString();
-        }
+        if (it != exifData.end()) return it->value().toString();
     } catch (...) {
         return "";
     }
@@ -42,17 +38,13 @@ std::string getPhotoDate(const std::string& imagePath) {
 
 std::string getFallbackDate(const fs::path& filePath) {
     auto ftime = fs::last_write_time(filePath);
-
     auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
         ftime - fs::file_time_type::clock::now() + std::chrono::system_clock::now()
     );
     std::time_t cftime = std::chrono::system_clock::to_time_t(sctp);
-
     std::tm* timeInfo = std::localtime(&cftime);
-
     char buffer[8];
     std::strftime(buffer, sizeof(buffer), "%Y:%m", timeInfo);
-
     return std::string(buffer);
 }
 
@@ -64,11 +56,25 @@ std::string getCurrentTimestamp() {
     return std::string(buffer);
 }
 
+// Compute a content-based hash of a file (for duplicate detection)
+std::string computeFileHash(const fs::path& filePath) {
+    std::ifstream file(filePath, std::ios::binary);
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    std::string content = buffer.str();
+
+    std::hash<std::string> hasher;
+    size_t hashValue = hasher(content);
+
+    std::ostringstream hexStream;
+    hexStream << std::hex << hashValue;
+    return hexStream.str();
+}
+
 void printProgress(int current, int total) {
     int barWidth = 40;
     float progress = (total == 0) ? 0 : (float)current / total;
     int pos = barWidth * progress;
-
     std::cout << "\r[";
     for (int i = 0; i < barWidth; i++) {
         if (i < pos) std::cout << "=";
@@ -101,6 +107,31 @@ int main(int argc, char* argv[]) {
 
     std::string destFolder = sourceFolder + "_organized";
 
+    // --- Set up database ---
+    sqlite3* db;
+    std::string dbPath = "apicmanager.db";
+    if (sqlite3_open(dbPath.c_str(), &db)) {
+        std::cout << "Error: Cannot open database: " << sqlite3_errmsg(db) << std::endl;
+        return 1;
+    }
+
+    const char* createTableSQL =
+        "CREATE TABLE IF NOT EXISTS photos ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "filename TEXT,"
+        "filepath TEXT,"
+        "year TEXT,"
+        "month TEXT,"
+        "file_hash TEXT UNIQUE"
+        ");";
+
+    char* errMsg = nullptr;
+    if (sqlite3_exec(db, createTableSQL, nullptr, nullptr, &errMsg) != SQLITE_OK) {
+        std::cout << "Error creating table: " << errMsg << std::endl;
+        sqlite3_free(errMsg);
+        return 1;
+    }
+
     // Set up log file
     std::string logFileName = "apicmanager_log_" + getCurrentTimestamp() + ".txt";
     std::ofstream logFile(logFileName);
@@ -109,7 +140,7 @@ int main(int argc, char* argv[]) {
     logFile << "Destination folder: " << destFolder << std::endl;
     logFile << "------------------------------------" << std::endl;
 
-    // Pass 1: collect all image files first
+    // Pass 1: collect all image files
     std::vector<fs::path> imageFiles;
     for (const auto& entry : fs::recursive_directory_iterator(sourceFolder)) {
         if (fs::is_regular_file(entry) && isImageFile(entry.path())) {
@@ -121,11 +152,35 @@ int main(int argc, char* argv[]) {
     std::cout << "Found " << total << " image files to organize.\n" << std::endl;
     logFile << "Found " << total << " image files to organize." << std::endl;
 
-    // Pass 2: process each file with progress bar
+    // Pass 2: process each file
     int copiedCount = 0;
     int fallbackCount = 0;
+    int duplicateCount = 0;
+    int processed = 0;
+
+    std::string checkSQL = "SELECT id FROM photos WHERE file_hash = ?;";
+    std::string insertSQL = "INSERT INTO photos (filename, filepath, year, month, file_hash) VALUES (?, ?, ?, ?, ?);";
 
     for (const auto& filePath : imageFiles) {
+        std::string fileHash = computeFileHash(filePath);
+
+        // Check for duplicate
+        sqlite3_stmt* checkStmt;
+        sqlite3_prepare_v2(db, checkSQL.c_str(), -1, &checkStmt, nullptr);
+        sqlite3_bind_text(checkStmt, 1, fileHash.c_str(), -1, SQLITE_STATIC);
+
+        bool isDuplicate = (sqlite3_step(checkStmt) == SQLITE_ROW);
+        sqlite3_finalize(checkStmt);
+
+        processed++;
+
+        if (isDuplicate) {
+            duplicateCount++;
+            logFile << "DUPLICATE (skipped): " << filePath.filename().string() << std::endl;
+            printProgress(processed, total);
+            continue;
+        }
+
         std::string date = getPhotoDate(filePath.string());
         std::string year, month;
         bool usedFallback = false;
@@ -143,9 +198,19 @@ int main(int argc, char* argv[]) {
 
         std::string targetDir = destFolder + "/" + year + "/" + month;
         fs::create_directories(targetDir);
-
         std::string targetPath = targetDir + "/" + filePath.filename().string();
         fs::copy_file(filePath, targetPath, fs::copy_options::overwrite_existing);
+
+        // Insert into database
+        sqlite3_stmt* insertStmt;
+        sqlite3_prepare_v2(db, insertSQL.c_str(), -1, &insertStmt, nullptr);
+        sqlite3_bind_text(insertStmt, 1, filePath.filename().string().c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(insertStmt, 2, targetPath.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(insertStmt, 3, year.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(insertStmt, 4, month.c_str(), -1, SQLITE_STATIC);
+        sqlite3_bind_text(insertStmt, 5, fileHash.c_str(), -1, SQLITE_STATIC);
+        sqlite3_step(insertStmt);
+        sqlite3_finalize(insertStmt);
 
         logFile << "COPIED: " << filePath.filename().string()
                 << " -> " << year << "/" << month
@@ -153,17 +218,22 @@ int main(int argc, char* argv[]) {
                 << std::endl;
 
         copiedCount++;
-        printProgress(copiedCount, total);
+        printProgress(processed, total);
     }
 
+    sqlite3_close(db);
+
     logFile << "------------------------------------" << std::endl;
-    logFile << "Summary: Copied " << copiedCount << ", Fallback used " << fallbackCount << std::endl;
+    logFile << "Summary: Copied " << copiedCount << ", Fallback used " << fallbackCount
+             << ", Duplicates skipped " << duplicateCount << std::endl;
     logFile.close();
 
     std::cout << "\n\n--- Summary ---" << std::endl;
     std::cout << "Copied: " << copiedCount << std::endl;
+    std::cout << "Duplicates skipped: " << duplicateCount << std::endl;
     std::cout << "Used fallback date: " << fallbackCount << std::endl;
     std::cout << "Log saved to: " << logFileName << std::endl;
+    std::cout << "Database saved to: " << dbPath << std::endl;
 
     return 0;
 }

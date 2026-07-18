@@ -12,3 +12,4 @@ organized/
 test_photos_organized/
 src/apicmanager_log_*.txt
 apicmanager_log_*.txt
+*.db
