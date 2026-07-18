@@ -13,3 +13,8 @@ test_photos_organized/
 src/apicmanager_log_*.txt
 apicmanager_log_*.txt
 *.db
+gui_test/gui_test
+gui_test/*.o
+gui_test/moc_*
+gui_test/Makefile
+gui_test/.qmake.stash
