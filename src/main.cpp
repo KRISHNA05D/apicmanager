@@ -6,6 +6,7 @@
 #include <vector>
 #include <fstream>
 #include <sstream>
+#include <iomanip>
 #include <exiv2/exiv2.hpp>
 #include <sqlite3.h>
 
@@ -48,7 +49,7 @@ std::string getFallbackDate(const fs::path& filePath) {
         std::strftime(buffer, sizeof(buffer), "%Y:%m", timeInfo);
         return std::string(buffer);
     } catch (...) {
-        return "1970:01"; // ultimate fallback if even modified-date read fails
+        return "1970:01";
     }
 }
 
@@ -89,45 +90,88 @@ void printProgress(int current, int total) {
 void printHelp(const char* programName) {
     std::cout << "ApicManager - Offline photo organizer using EXIF metadata\n" << std::endl;
     std::cout << "Usage:" << std::endl;
-    std::cout << "  " << programName << " organize <source_folder>\n" << std::endl;
-    std::cout << "Description:" << std::endl;
-    std::cout << "  Scans <source_folder> recursively for images (.jpg, .jpeg, .png)," << std::endl;
-    std::cout << "  reads their EXIF date (falling back to file modified date if missing)," << std::endl;
-    std::cout << "  and copies them into <source_folder>_organized/Year/Month/." << std::endl;
-    std::cout << "  Original files are never modified or deleted." << std::endl;
-    std::cout << "  Duplicate files (same content) are automatically skipped.\n" << std::endl;
+    std::cout << "  " << programName << " organize <source_folder>" << std::endl;
+    std::cout << "  " << programName << " search <year> [month]" << std::endl;
+    std::cout << "  " << programName << " stats\n" << std::endl;
     std::cout << "Options:" << std::endl;
     std::cout << "  --help, -h    Show this help message" << std::endl;
 }
 
-int main(int argc, char* argv[]) {
-
-    // Handle --help / -h anywhere as the first argument
-    if (argc < 2 || std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h") {
-        printHelp(argv[0]);
-        return argc < 2 ? 1 : 0;
-    }
-
-    if (argc < 3) {
-        std::cout << "Error: Missing source folder.\n" << std::endl;
-        printHelp(argv[0]);
+// --- Command: search ---
+int runSearch(const std::string& year, const std::string& month) {
+    sqlite3* db;
+    if (sqlite3_open("apicmanager.db", &db)) {
+        std::cout << "Error: Cannot open database. Have you run 'organize' first?" << std::endl;
         return 1;
     }
 
-    std::string command = argv[1];
-    std::string sourceFolder = argv[2];
+    std::string sql;
+    if (month.empty()) {
+        sql = "SELECT filename, filepath, year, month FROM photos WHERE year = ? ORDER BY month;";
+    } else {
+        sql = "SELECT filename, filepath, year, month FROM photos WHERE year = ? AND month = ?;";
+    }
 
-    if (command != "organize") {
-        std::cout << "Error: Unknown command '" << command << "'\n" << std::endl;
-        printHelp(argv[0]);
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr);
+    sqlite3_bind_text(stmt, 1, year.c_str(), -1, SQLITE_STATIC);
+    if (!month.empty()) {
+        sqlite3_bind_text(stmt, 2, month.c_str(), -1, SQLITE_STATIC);
+    }
+
+    int count = 0;
+    std::cout << "\nResults:\n" << std::endl;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        std::string filename = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        std::string filepath = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        std::string y = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        std::string m = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        std::cout << y << "/" << m << "  " << filename << std::endl;
+        count++;
+    }
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+
+    std::cout << "\nTotal found: " << count << std::endl;
+    return 0;
+}
+
+// --- Command: stats ---
+int runStats() {
+    sqlite3* db;
+    if (sqlite3_open("apicmanager.db", &db)) {
+        std::cout << "Error: Cannot open database. Have you run 'organize' first?" << std::endl;
         return 1;
     }
 
+    const char* sql = "SELECT year, COUNT(*) as count FROM photos GROUP BY year ORDER BY year;";
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+
+    std::cout << "\n--- Photo Library Stats ---\n" << std::endl;
+    int totalPhotos = 0;
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        std::string year = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        int count = sqlite3_column_int(stmt, 1);
+        totalPhotos += count;
+        std::cout << year << ": " << count << " photos" << std::endl;
+    }
+    sqlite3_finalize(stmt);
+
+    std::cout << "\nTotal photos in library: " << totalPhotos << std::endl;
+
+    sqlite3_close(db);
+    return 0;
+}
+
+// --- Command: organize (existing logic) ---
+int runOrganize(const std::string& sourceFolder) {
     if (!fs::exists(sourceFolder)) {
         std::cout << "Error: Folder does not exist: " << sourceFolder << std::endl;
         return 1;
     }
-
     if (!fs::is_directory(sourceFolder)) {
         std::cout << "Error: Path is not a folder: " << sourceFolder << std::endl;
         return 1;
@@ -136,8 +180,7 @@ int main(int argc, char* argv[]) {
     std::string destFolder = sourceFolder + "_organized";
 
     sqlite3* db;
-    std::string dbPath = "apicmanager.db";
-    if (sqlite3_open(dbPath.c_str(), &db)) {
+    if (sqlite3_open("apicmanager.db", &db)) {
         std::cout << "Error: Cannot open database: " << sqlite3_errmsg(db) << std::endl;
         return 1;
     }
@@ -145,12 +188,8 @@ int main(int argc, char* argv[]) {
     const char* createTableSQL =
         "CREATE TABLE IF NOT EXISTS photos ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        "filename TEXT,"
-        "filepath TEXT,"
-        "year TEXT,"
-        "month TEXT,"
-        "file_hash TEXT UNIQUE"
-        ");";
+        "filename TEXT, filepath TEXT, year TEXT, month TEXT,"
+        "file_hash TEXT UNIQUE);";
 
     char* errMsg = nullptr;
     if (sqlite3_exec(db, createTableSQL, nullptr, nullptr, &errMsg) != SQLITE_OK) {
@@ -185,18 +224,13 @@ int main(int argc, char* argv[]) {
     std::cout << "Found " << total << " image files to organize.\n" << std::endl;
     logFile << "Found " << total << " image files to organize." << std::endl;
 
-    int copiedCount = 0;
-    int fallbackCount = 0;
-    int duplicateCount = 0;
-    int errorCount = 0;
-    int processed = 0;
+    int copiedCount = 0, fallbackCount = 0, duplicateCount = 0, errorCount = 0, processed = 0;
 
     std::string checkSQL = "SELECT id FROM photos WHERE file_hash = ?;";
     std::string insertSQL = "INSERT INTO photos (filename, filepath, year, month, file_hash) VALUES (?, ?, ?, ?, ?);";
 
     for (const auto& filePath : imageFiles) {
         processed++;
-
         std::string fileHash;
         try {
             fileHash = computeFileHash(filePath);
@@ -256,11 +290,9 @@ int main(int argc, char* argv[]) {
                     << (usedFallback ? " [fallback date used]" : " [EXIF date used]")
                     << std::endl;
             copiedCount++;
-
         } catch (const std::exception& e) {
             errorCount++;
-            logFile << "ERROR (copy failed): " << filePath.filename().string()
-                    << " - " << e.what() << std::endl;
+            logFile << "ERROR (copy failed): " << filePath.filename().string() << " - " << e.what() << std::endl;
         }
 
         printProgress(processed, total);
@@ -270,8 +302,7 @@ int main(int argc, char* argv[]) {
 
     logFile << "------------------------------------" << std::endl;
     logFile << "Summary: Copied " << copiedCount << ", Fallback used " << fallbackCount
-             << ", Duplicates skipped " << duplicateCount
-             << ", Errors " << errorCount << std::endl;
+             << ", Duplicates skipped " << duplicateCount << ", Errors " << errorCount << std::endl;
     logFile.close();
 
     std::cout << "\n\n--- Summary ---" << std::endl;
@@ -280,7 +311,43 @@ int main(int argc, char* argv[]) {
     std::cout << "Used fallback date: " << fallbackCount << std::endl;
     std::cout << "Errors: " << errorCount << std::endl;
     std::cout << "Log saved to: " << logFileName << std::endl;
-    std::cout << "Database saved to: " << dbPath << std::endl;
+    std::cout << "Database saved to: apicmanager.db" << std::endl;
 
     return 0;
+}
+
+int main(int argc, char* argv[]) {
+
+    if (argc < 2 || std::string(argv[1]) == "--help" || std::string(argv[1]) == "-h") {
+        printHelp(argv[0]);
+        return argc < 2 ? 1 : 0;
+    }
+
+    std::string command = argv[1];
+
+    if (command == "organize") {
+        if (argc < 3) {
+            std::cout << "Error: Missing source folder.\n" << std::endl;
+            printHelp(argv[0]);
+            return 1;
+        }
+        return runOrganize(argv[2]);
+    }
+    else if (command == "search") {
+        if (argc < 3) {
+            std::cout << "Error: Missing year. Usage: " << argv[0] << " search <year> [month]" << std::endl;
+            return 1;
+        }
+        std::string year = argv[2];
+        std::string month = (argc >= 4) ? argv[3] : "";
+        return runSearch(year, month);
+    }
+    else if (command == "stats") {
+        return runStats();
+    }
+    else {
+        std::cout << "Error: Unknown command '" << command << "'\n" << std::endl;
+        printHelp(argv[0]);
+        return 1;
+    }
 }
