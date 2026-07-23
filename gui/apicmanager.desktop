@@ -1,0 +1,8 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=ApicManager
+Comment=Offline photo organizer using EXIF metadata
+Exec=/home/tomcat/projects/apicmanager/gui/apicmanager_gui
+Terminal=false
+Categories=Utility;
