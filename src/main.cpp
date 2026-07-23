@@ -97,6 +97,7 @@ void printHelp(const char* programName) {
     std::cout << "  " << programName << " stats\n" << std::endl;
     std::cout << "  " << programName << " backup <organized_folder> <backup_destination>\n" << std::endl;
     std::cout << "Options:" << std::endl;
+    std::cout << "  " << programName << " restore <backup_file> <destination>\n" << std::endl;
     std::cout << "  --help, -h    Show this help message" << std::endl;
 }
 
@@ -169,6 +170,31 @@ int runBackup(const std::string& organizedFolder, const std::string& backupDest)
     }
 }
 
+// --- Command: restore ---
+int runRestore(const std::string& backupFile, const std::string& destination) {
+    if (!fs::exists(backupFile)) {
+        std::cout << "Error: Backup file does not exist: " << backupFile << std::endl;
+        return 1;
+    }
+
+    if (!fs::exists(destination)) {
+        fs::create_directories(destination);
+    }
+
+    std::string command = "tar -xzf \"" + backupFile + "\" -C \"" + destination + "\"";
+
+    std::cout << "Restoring backup, this may take a moment..." << std::endl;
+
+    int result = std::system(command.c_str());
+
+    if (result == 0) {
+        std::cout << "Backup restored successfully to: " << destination << std::endl;
+        return 0;
+    } else {
+        std::cout << "Error: Restore failed." << std::endl;
+        return 1;
+    }
+}
 // --- Command: stats ---
 int runStats() {
     sqlite3* db;
@@ -381,6 +407,13 @@ int main(int argc, char* argv[]) {
     if (argc < 4) {
         std::cout << "Error: Usage: " << argv[0] << " backup <organized_folder> <backup_destination>" << std::endl;
         return 1;
+    }
+    else if (command == "restore") {
+    if (argc < 4) {
+        std::cout << "Error: Usage: " << argv[0] << " restore <backup_file> <destination>" << std::endl;
+        return 1;
+    }
+    return runRestore(argv[2], argv[3]);
     }
     return runBackup(argv[2], argv[3]);
     }

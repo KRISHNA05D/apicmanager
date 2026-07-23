@@ -97,11 +97,18 @@ int main(int argc, char *argv[]) {
 
     window.setLayout(layout);
 
-    // Browse button opens a folder picker
+    // Browse button opens a folder picker that also shows files for preview
     QObject::connect(browseButton, &QPushButton::clicked, [&]() {
-        QString dir = QFileDialog::getExistingDirectory(&window, "Select Photo Folder");
-        if (!dir.isEmpty()) {
-            pathInput->setText(dir);
+        QFileDialog dialog(&window, "Select Photo Folder");
+        dialog.setFileMode(QFileDialog::Directory);
+        dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+        dialog.setOption(QFileDialog::ShowDirsOnly, false); // shows files too, for preview
+
+        if (dialog.exec() == QDialog::Accepted) {
+            QStringList selected = dialog.selectedFiles();
+            if (!selected.isEmpty()) {
+                pathInput->setText(selected.first());
+            }
         }
     });
 
@@ -156,7 +163,7 @@ int main(int argc, char *argv[]) {
             if (isDuplicate) {
                 duplicateCount++;
                 progressBar->setValue(processed);
-                qApp->processEvents(); // keep GUI responsive
+                qApp->processEvents();
                 continue;
             }
 
@@ -189,7 +196,7 @@ int main(int argc, char *argv[]) {
 
             copiedCount++;
             progressBar->setValue(processed);
-            qApp->processEvents(); // keep GUI responsive during the loop
+            qApp->processEvents();
         }
 
         sqlite3_close(db);
