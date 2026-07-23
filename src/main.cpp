@@ -141,7 +141,7 @@ int runSearch(const std::string& year, const std::string& month) {
     return 0;
 }
 
-// --- Command: backup ---
+// Command: backup ---
 int runBackup(const std::string& organizedFolder, const std::string& backupDest) {
     if (!fs::exists(organizedFolder)) {
         std::cout << "Error: Organized folder does not exist: " << organizedFolder << std::endl;
@@ -150,6 +150,20 @@ int runBackup(const std::string& organizedFolder, const std::string& backupDest)
 
     if (!fs::exists(backupDest)) {
         fs::create_directories(backupDest);
+    }
+
+    // Delete old backups before creating a new one
+    int deletedCount = 0;
+    for (const auto& entry : fs::directory_iterator(backupDest)) {
+        std::string filename = entry.path().filename().string();
+        if (filename.rfind("apicmanager_backup_", 0) == 0 &&
+            filename.size() > 7 && filename.substr(filename.size() - 7) == ".tar.gz") {
+            fs::remove(entry.path());
+            deletedCount++;
+        }
+    }
+    if (deletedCount > 0) {
+        std::cout << "Removed " << deletedCount << " old backup(s)." << std::endl;
     }
 
     std::string timestamp = getCurrentTimestamp();
