@@ -18,3 +18,4 @@ gui_test/*.o
 gui_test/moc_*
 gui_test/Makefile
 gui_test/.qmake.stash
+*.tar.gz

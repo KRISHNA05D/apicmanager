@@ -9,6 +9,8 @@
 #include <iomanip>
 #include <exiv2/exiv2.hpp>
 #include <sqlite3.h>
+#include <exiv2/exiv2.hpp>
+#include <cstdlib>
 
 namespace fs = std::filesystem;
 
@@ -93,6 +95,7 @@ void printHelp(const char* programName) {
     std::cout << "  " << programName << " organize <source_folder>" << std::endl;
     std::cout << "  " << programName << " search <year> [month]" << std::endl;
     std::cout << "  " << programName << " stats\n" << std::endl;
+    std::cout << "  " << programName << " backup <organized_folder> <backup_destination>\n" << std::endl;
     std::cout << "Options:" << std::endl;
     std::cout << "  --help, -h    Show this help message" << std::endl;
 }
@@ -135,6 +138,35 @@ int runSearch(const std::string& year, const std::string& month) {
 
     std::cout << "\nTotal found: " << count << std::endl;
     return 0;
+}
+
+// --- Command: backup ---
+int runBackup(const std::string& organizedFolder, const std::string& backupDest) {
+    if (!fs::exists(organizedFolder)) {
+        std::cout << "Error: Organized folder does not exist: " << organizedFolder << std::endl;
+        return 1;
+    }
+
+    if (!fs::exists(backupDest)) {
+        fs::create_directories(backupDest);
+    }
+
+    std::string timestamp = getCurrentTimestamp();
+    std::string backupFileName = backupDest + "/apicmanager_backup_" + timestamp + ".tar.gz";
+
+    std::string command = "tar -czf \"" + backupFileName + "\" \"" + organizedFolder + "\" apicmanager.db";
+
+    std::cout << "Creating backup, this may take a moment..." << std::endl;
+
+    int result = std::system(command.c_str());
+
+    if (result == 0) {
+        std::cout << "Backup created successfully: " << backupFileName << std::endl;
+        return 0;
+    } else {
+        std::cout << "Error: Backup failed." << std::endl;
+        return 1;
+    }
 }
 
 // --- Command: stats ---
@@ -344,6 +376,13 @@ int main(int argc, char* argv[]) {
     }
     else if (command == "stats") {
         return runStats();
+    }
+    else if (command == "backup") {
+    if (argc < 4) {
+        std::cout << "Error: Usage: " << argv[0] << " backup <organized_folder> <backup_destination>" << std::endl;
+        return 1;
+    }
+    return runBackup(argv[2], argv[3]);
     }
     else {
         std::cout << "Error: Unknown command '" << command << "'\n" << std::endl;
